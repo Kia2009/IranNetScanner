@@ -1,0 +1,7 @@
+requests
+rich
+dnspython
+ipaddress
+prettytable
+colorama
+tqdm
