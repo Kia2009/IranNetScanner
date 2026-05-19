@@ -52,8 +52,9 @@ main_menu() {
         echo -e "${GREEN}2)${NC} 🌐 Domain Reachability"
         echo -e "${GREEN}3)${NC} 📡 DNS Tools (Latency/Hunter)"
         echo -e "${GREEN}4)${NC} ⚡ CDN IP Scanner (CF/Akamai/Google/Amazon/Azure)"
-        echo -e "${GREEN}5)${NC} 🛠️  VLESS Config Modifier"
-        echo -e "${GREEN}6)${NC} ℹ️  Help & About"
+        echo -e "${GREEN}5)${NC} 🌍 Check-Host.net (Remote Test from IR Nodes)"
+        echo -e "${GREEN}6)${NC} 🛠️  VLESS Config Modifier"
+        echo -e "${GREEN}7)${NC} ℹ️  Help & About"
         echo -e "${GREEN}0)${NC} ❌ Exit"
         echo -e ""
         read -p "Select an option: " opt
@@ -63,12 +64,29 @@ main_menu() {
             2) python3 scripts/domain_checker.py; read -p "Press Enter to return..." ;;
             3) dns_menu ;;
             4) cdn_menu ;;
-            5) config_modifier ;;
-            6) show_help ;;
+            5) remote_check_menu ;;
+            6) config_modifier ;;
+            7) show_help ;;
             0) exit 0 ;;
             *) echo -e "${RED}Invalid option!${NC}"; sleep 1 ;;
         esac
     done
+}
+
+remote_check_menu() {
+    show_banner
+    echo -e "${YELLOW}Remote Check (Check-Host.net)${NC}"
+    read -p "Enter Target (IP or Domain): " target
+    echo -e "1) Ping Test"
+    echo -e "2) HTTP Test"
+    read -p "Select test type: " ttype
+
+    case $ttype in
+        1) python3 scripts/check_host.py "$target" ping ;;
+        2) python3 scripts/check_host.py "$target" http ;;
+        *) echo -e "${RED}Invalid choice!${NC}" ;;
+    esac
+    read -p "Press Enter to return..."
 }
 
 dns_menu() {

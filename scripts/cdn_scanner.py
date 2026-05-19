@@ -24,8 +24,7 @@ def test_ip(ip, sni, timeout=2):
     headers = {"Host": sni}
     start_time = time.time()
     try:
-        # We use a HEAD request with no-cors equivalent logic
-        # Actually in Python requests, we just check if we can establish a connection
+        # Simple TCP/HTTP check
         response = requests.head(url, headers=headers, timeout=timeout, verify=False)
         latency = (time.time() - start_time) * 1000
         return ip, True, latency
@@ -33,42 +32,48 @@ def test_ip(ip, sni, timeout=2):
         return ip, False, None
 
 
-def scan_cdn(cdn_name, sni_list, selected_items, max_threads=50, limit=100):
-    all_ips = []
-
-    # Calculate how many IPs to take from each range to be "fair"
-    if selected_items:
-        per_range_limit = max(1, limit // len(selected_items))
-
-        for item in selected_items:
-            if "/" in item:
-                try:
-                    network = ipaddress.ip_network(item)
-                    hosts = list(network.hosts())
-                    sample_size = min(len(hosts), per_range_limit)
-                    all_ips.extend(
-                        [str(ip) for ip in random.sample(hosts, sample_size)]
-                    )
-                except Exception:
-                    pass
-            else:
-                all_ips.append(item)
-
-    if not all_ips:
-        console.print(f"[bold red]No IPs to scan.[/bold red]")
+def scan_cdn(cdn_name, sni_list, selected_items, max_threads=100, limit=100):
+    if not selected_items:
+        console.print("[bold red]No ranges selected.[/bold red]")
         return
 
-    sni = sni_list[0]  # Default to first SNI
+    # Fair distribution logic
+    target_total = limit
+    per_range_quota = target_total // len(selected_items)
+    if per_range_quota < 1: per_range_quota = 1
+    
+    final_ips_to_scan = []
+    
+    for item in selected_items:
+        if "/" in item:
+            try:
+                network = ipaddress.ip_network(item)
+                hosts = list(network.hosts())
+                count = min(len(hosts), per_range_quota)
+                if count > 0:
+                    final_ips_to_scan.extend([str(ip) for ip in random.sample(hosts, count)])
+            except Exception:
+                pass
+        else:
+            final_ips_to_scan.append(item)
+
+    if not final_ips_to_scan:
+        console.print("[bold red]No valid IPs found to scan.[/bold red]")
+        return
+
+    # Shuffle to mix ranges
+    random.shuffle(final_ips_to_scan)
+    final_ips_to_scan = final_ips_to_scan[:limit]
+
+    sni = sni_list[0]
     results = []
 
-    console.print(
-        f"[bold yellow]Scanning {cdn_name} ({len(all_ips)} IPs) using SNI: {sni}...[/bold yellow]"
-    )
+    console.print(f"[bold yellow]Scanning {cdn_name} ({len(final_ips_to_scan)} IPs) using SNI: {sni}...[/bold yellow]")
 
     with Progress() as progress:
-        task = progress.add_task("[cyan]Scanning...", total=len(all_ips))
+        task = progress.add_task("[cyan]Scanning...", total=len(final_ips_to_scan))
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            future_to_ip = {executor.submit(test_ip, ip, sni): ip for ip in all_ips}
+            future_to_ip = {executor.submit(test_ip, ip, sni): ip for ip in final_ips_to_scan}
             for future in as_completed(future_to_ip):
                 res = future.result()
                 if res[1]:
@@ -89,9 +94,7 @@ def scan_cdn(cdn_name, sni_list, selected_items, max_threads=50, limit=100):
         # Save results
         with open(f"{cdn_name.lower()}_results.txt", "w") as f:
             f.write(",".join([r[0] for r in results]))
-        console.print(
-            f"[bold green]Results saved to {cdn_name.lower()}_results.txt[/bold green]"
-        )
+        console.print(f"[bold green]Results saved to {cdn_name.lower()}_results.txt[/bold green]")
     else:
         console.print("[bold red]No working IPs found.[/bold red]")
 
@@ -113,40 +116,24 @@ if __name__ == "__main__":
 
     if cdn_type in cdns:
         sni, ip_file = cdns[cdn_type]
-
-        # New selection logic
         available_ranges = load_ips(ip_file)
 
-        # Check if custom_ips.txt exists
+        # Check for custom_ips.txt
         custom_path = "custom_ips.txt"
         if os.path.exists(custom_path):
             with open(custom_path, "r") as f:
-                custom_ips = [
-                    line.strip()
-                    for line in f
-                    if line.strip() and not line.startswith("#")
-                ]
+                custom_ips = [line.strip() for line in f if line.strip() and not line.startswith("#")]
             if custom_ips:
-                available_ranges.append("--- CUSTOM IPS FROM FILE ---")
+                available_ranges.append("--- CUSTOM IPS ---")
                 available_ranges.extend(custom_ips)
 
-        # In a real TUI we'd use a better picker, but for simplicity here:
-        console.print(
-            f"[bold cyan]Available ranges for {cdn_type.capitalize()}:[/bold cyan]"
-        )
+        console.print(f"[bold cyan]Available ranges for {cdn_type.capitalize()}:[/bold cyan]")
         for i, r in enumerate(available_ranges):
             console.print(f"{i + 1}) {r}")
 
-        choice = console.input(
-            "[bold yellow]Enter numbers to scan (comma separated, or 'all'): [/bold yellow]"
-        )
-        limit_input = (
-            console.input(
-                "[bold yellow]Max IPs to scan in total (default 100): [/bold yellow]"
-            )
-            or "100"
-        )
-
+        choice = console.input("[bold yellow]Enter numbers (comma-separated, e.g. 1,3,5) or 'all': [/bold yellow]")
+        limit_input = console.input("[bold yellow]Max total IPs to scan (default 100): [/bold yellow]") or "100"
+        
         try:
             scan_limit = int(limit_input)
         except:
@@ -158,16 +145,9 @@ if __name__ == "__main__":
         else:
             try:
                 indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                selected_ranges = [
-                    available_ranges[i]
-                    for i in indices
-                    if i < len(available_ranges)
-                    and not available_ranges[i].startswith("---")
-                ]
+                selected_ranges = [available_ranges[i] for i in indices if i < len(available_ranges) and not available_ranges[i].startswith("---")]
             except:
-                console.print(
-                    "[bold red]Invalid choice, scanning all default ranges.[/bold red]"
-                )
+                console.print("[bold red]Invalid input. Using all default ranges.[/bold red]")
                 selected_ranges = load_ips(ip_file)
 
         scan_cdn(cdn_type.capitalize(), sni, selected_ranges, limit=scan_limit)
